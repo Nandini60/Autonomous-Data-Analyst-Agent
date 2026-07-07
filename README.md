@@ -79,6 +79,7 @@ autonomous-data-analyst/
 ├── agent/
 │   ├── __init__.py
 │   ├── graph.py              # LangGraph agent orchestrator
+│   ├── extras.py             # Schema, Insights, Confidence, Export, Guardrails
 │   └── tools/
 │       ├── __init__.py
 │       ├── sql_tool.py       # Text-to-SQL with self-correction
@@ -92,13 +93,15 @@ autonomous-data-analyst/
 │   └── doc_loader.py         # PDF → ChromaDB pipeline
 ├── data/                     # Generated at runtime
 │   ├── *.csv
-│   ├── superstore.db
+│   ├── database.db
 │   └── docs/*.pdf
 ├── vectorstore/              # ChromaDB persistent storage
+├── app.py                    # Streamlit UI
 ├── test_phase1.py            # SQL tool tests (8/8 ✅)
 ├── test_phase2.py            # RAG tool tests (9/9 ✅)
 ├── test_phase3.py            # Code tool tests (8/8 ✅)
-├── test_phase4.py            # Agent integration tests
+├── test_phase4.py            # Agent integration tests (8/8 ✅)
+├── test_phase6.py            # Extra features tests (7/7 ✅)
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -139,9 +142,10 @@ python test_phase1.py   # SQL Tool
 python test_phase2.py   # RAG Tool
 python test_phase3.py   # Code Tool
 python test_phase4.py   # Agent Integration
+python test_phase6.py   # Extra Features
 ```
 
-### 5. Launch UI (Coming Soon)
+### 5. Launch UI
 
 ```bash
 streamlit run app.py
@@ -170,7 +174,21 @@ streamlit run app.py
 | 1 | SQL Tool (Text-to-SQL) | 8/8 | ✅ All Passed |
 | 2 | RAG Tool (Document Q&A) | 9/9 | ✅ All Passed |
 | 3 | Code Tool (Python Exec) | 8/8 | ✅ All Passed |
-| 4 | LangGraph Agent | 8/8 | 🚧 In Progress |
+| 4 | LangGraph Agent | 8/8 | ✅ All Passed |
+| 6 | Extra Features | 7/7 | ✅ All Passed |
+
+**Total: 40/40 tests passing** ✅
+
+---
+
+## 🛡️ Safety Features
+
+- **PII Detection**: Detects emails, phone numbers, SSNs in queries
+- **PII Redaction**: Automatically redacts sensitive data from outputs
+- **Prompt Injection Guard**: Blocks common prompt injection attacks
+- **Input Validation**: Query length limits and sanitization
+- **SQL Injection Guard**: Blocks dangerous SQL operations (DROP, DELETE, etc.)
+- **Sandboxed Code Execution**: Blocked dangerous Python imports (os, subprocess, etc.)
 
 ---
 

@@ -394,6 +394,41 @@ def render_sidebar():
 
         st.divider()
 
+        # Export PDF
+        st.markdown("### 📥 Export")
+        if st.button("📄 Export Chat as PDF", use_container_width=True):
+            from agent.extras import ReportExporter
+            exporter = ReportExporter()
+            output = exporter.export(
+                st.session_state.messages,
+                filename="data/analysis_report.pdf",
+            )
+            if output:
+                with open(output, "rb") as f:
+                    st.download_button(
+                        "⬇️ Download PDF",
+                        data=f.read(),
+                        file_name="analysis_report.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+            else:
+                st.warning("PDF export requires fpdf2")
+
+        st.divider()
+
+        # DB Schema
+        st.markdown("### 🗄️ Database Schema")
+        with st.expander("View Schema"):
+            from agent.extras import SchemaDiscovery
+            try:
+                schema = SchemaDiscovery(db_path="data/database.db")
+                st.code(schema.get_schema(), language="text")
+            except Exception:
+                st.info("Schema unavailable — generate data first.")
+
+        st.divider()
+
         # Clear chat
         if st.button("🗑️ Clear Chat", use_container_width=True):
             st.session_state.messages = []
@@ -414,6 +449,7 @@ def render_sidebar():
         - ⚡ Groq (LLM - Llama 3.3 70B)
         - 🔍 ChromaDB (Vector Store)
         - 📊 Plotly (Charts)
+        - 🛡️ Guardrails (PII + Injection)
         """)
 
 
@@ -482,6 +518,27 @@ def process_query(query: str):
         st.error("Agent not initialized. Please check your API key.")
         return
 
+    # --- Guardrails: validate input ---
+    from agent.extras import Guardrails
+    validation = Guardrails.validate(query)
+
+    if not validation["is_safe"]:
+        st.session_state.messages.append({"role": "user", "content": query})
+        blocked_msg = "🛡️ **Query blocked by safety guardrails.**\n\n"
+        for w in validation["warnings"]:
+            blocked_msg += f"- {w}\n"
+        st.session_state.messages.append({
+            "role": "assistant", "content": blocked_msg, "metadata": {},
+        })
+        return
+
+    # Show guardrail warnings (non-blocking)
+    if validation["warnings"]:
+        for w in validation["warnings"]:
+            st.toast(w, icon="⚠️")
+
+    query = validation["sanitized_query"]
+
     # Add user message
     st.session_state.messages.append({"role": "user", "content": query})
 
@@ -504,8 +561,10 @@ def process_query(query: str):
                     badges = " ".join(get_tool_badge(t) for t in tools)
                     st.markdown(badges, unsafe_allow_html=True)
 
-                # Confidence
-                conf = result.get("confidence", 0)
+                # Enhanced confidence scoring
+                from agent.extras import ConfidenceScorer
+                conf_data = ConfidenceScorer.score(result)
+                conf = conf_data["overall"]
                 if conf > 0:
                     st.markdown(get_confidence_html(conf), unsafe_allow_html=True)
 
@@ -525,6 +584,18 @@ def process_query(query: str):
                 figures = result.get("figures", [])
                 for fig in figures:
                     st.plotly_chart(fig, use_container_width=True)
+
+                # Auto-generate business insights for SQL results
+                if sql_result and sql_result.get("success"):
+                    with st.expander("💡 Business Insights"):
+                        with st.spinner("Generating insights..."):
+                            from agent.extras import InsightsGenerator
+                            gen = InsightsGenerator()
+                            insights = gen.generate(
+                                question=query,
+                                data=sql_result.get("data", []),
+                            )
+                            st.markdown(insights)
 
                 # Execution time
                 exec_time = result.get("execution_time", 0)
