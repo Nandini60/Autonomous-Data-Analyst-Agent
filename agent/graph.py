@@ -447,12 +447,19 @@ class DataAnalystAgent:
             sql_tool = self._get_sql_tool()
             result = sql_tool.run(question)
 
+            # Extract data from the DataFrame
+            data_list = []
+            col_list = []
+            if result.dataframe is not None and not result.dataframe.empty:
+                data_list = result.dataframe.head(20).values.tolist()
+                col_list = result.dataframe.columns.tolist()
+
             sql_result = {
                 "success": result.success,
                 "answer": result.explanation if result.success else result.error,
-                "sql": result.sql,
-                "data": result.data[:20] if result.data else [],
-                "columns": result.columns,
+                "sql": result.sql_query,
+                "data": data_list,
+                "columns": col_list,
                 "row_count": result.row_count,
             }
 
@@ -704,7 +711,8 @@ class DataAnalystAgent:
                 f"DATABASE QUERY RESULT:\n"
                 f"SQL: {sql_result.get('sql', 'N/A')}\n"
                 f"Answer: {sql_result.get('answer', 'No data')}\n"
-                f"Rows returned: {sql_result.get('row_count', 0)}"
+                f"Rows returned: {sql_result.get('row_count', 0)}\n"
+                f"Data: {sql_result.get('data', [])[:5]}"
             )
 
         rag_result = state.get("rag_result")

@@ -50,17 +50,17 @@ def main() -> None:
 
     # Ensure data exists
     from utils.generate_data import generate_all
-    from utils.db_loader import load_all_csvs
+    from utils.db_loader import load_csvs_to_sqlite
     from utils.generate_docs import generate_all_docs
 
-    db_path = Path("data/superstore.db")
+    db_path = Path("data/database.db")
     if not db_path.exists():
         print("  Generating dataset ...")
-        generate_all(outdir="data")
-        load_all_csvs(csv_dir="data", db_path=str(db_path))
+        generate_all(data_dir="data")
+        load_csvs_to_sqlite(data_dir="data", db_path=str(db_path))
 
     docs_dir = Path("data/docs")
-    if not list(docs_dir.glob("*.pdf")):
+    if not docs_dir.exists() or not list(docs_dir.glob("*.pdf")):
         print("  Generating PDF documents ...")
         generate_all_docs(outdir=str(docs_dir))
 
