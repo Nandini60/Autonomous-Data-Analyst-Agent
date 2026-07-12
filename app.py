@@ -250,6 +250,10 @@ def init_session_state():
         st.session_state.agent_ready = False
     if "uploaded_tables" not in st.session_state:
         st.session_state.uploaded_tables = []
+    if "uploaded_pdfs" not in st.session_state:
+        st.session_state.uploaded_pdfs = []
+    if "last_dataframes" not in st.session_state:
+        st.session_state.last_dataframes = []
 
 
 def load_agent():
@@ -337,6 +341,77 @@ def render_sources(sources: list[str]) -> str:
     return f'<div style="margin-top:6px;">{tags}</div>'
 
 
+def _render_csv_export_panel():
+    """Render the CSV data export panel in the sidebar."""
+    import pandas as pd
+
+    st.markdown("---")
+
+    last_dfs = st.session_state.get("last_dataframes", [])
+
+    if last_dfs:
+        st.markdown("**📋 Last Query Results:**")
+        for i, df in enumerate(last_dfs):
+            if hasattr(df, "to_csv"):
+                label = f"Result {i + 1}" if len(last_dfs) > 1 else "Query Result"
+                st.caption(f"{label}: {len(df):,} rows × {len(df.columns)} cols")
+                st.download_button(
+                    f"⬇️ {label}.csv",
+                    data=df.to_csv(index=False),
+                    file_name=f"result_{i + 1}.csv",
+                    mime="text/csv",
+                    key=f"sidebar_dl_{i}",
+                    use_container_width=True,
+                )
+    else:
+        st.info("Run a query first to export its results as CSV.")
+
+    # Direct table export
+    st.markdown("**🗄️ Export Full Table:**")
+    try:
+        from agent.extras import SchemaDiscovery
+        schema = SchemaDiscovery(db_path="data/database.db")
+        tables = schema.get_table_names()
+
+        if tables:
+            selected_table = st.selectbox(
+                "Select table",
+                tables,
+                key="export_table_select",
+            )
+
+            max_rows = st.number_input(
+                "Max rows",
+                min_value=10,
+                max_value=100000,
+                value=1000,
+                step=100,
+                key="export_max_rows",
+            )
+
+            if st.button("⬇️ Export Table", use_container_width=True, key="btn_export_table"):
+                import sqlite3
+                conn = sqlite3.connect("data/database.db")
+                df_table = pd.read_sql_query(
+                    f"SELECT * FROM {selected_table} LIMIT {max_rows}",
+                    conn,
+                )
+                conn.close()
+
+                st.download_button(
+                    f"💾 Download {selected_table}.csv ({len(df_table):,} rows)",
+                    data=df_table.to_csv(index=False),
+                    file_name=f"{selected_table}.csv",
+                    mime="text/csv",
+                    key=f"dl_table_{selected_table}",
+                    use_container_width=True,
+                )
+        else:
+            st.info("No tables found. Upload a CSV first.")
+    except Exception:
+        st.info("Database not available yet.")
+
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
@@ -396,138 +471,217 @@ def render_sidebar():
 
         st.divider()
 
-        # --- CSV Upload ---
+        # --- File Upload (CSV + PDF) ---
         st.markdown("### 📂 Upload Your Data")
-        uploaded_file = st.file_uploader(
-            "Drop a CSV file to add it to the database",
-            type=["csv"],
-            help="The CSV will be loaded as a new table. You can then query it with natural language!",
+
+        upload_type = st.radio(
+            "File type",
+            ["📊 CSV (Database)", "📄 PDF (Documents)"],
+            horizontal=True,
+            key="upload_type",
+            label_visibility="collapsed",
         )
 
-        if uploaded_file is not None:
-            import pandas as pd
-            import re as _re
+        # ---- CSV Upload ----
+        if upload_type == "📊 CSV (Database)":
+            uploaded_csv = st.file_uploader(
+                "Drop a CSV to add as a database table",
+                type=["csv"],
+                help="The CSV will be loaded as a new table you can query with natural language.",
+                key="csv_uploader",
+            )
 
-            # Read the uploaded file
-            try:
-                df_preview = pd.read_csv(uploaded_file)
-                uploaded_file.seek(0)  # Reset for later read
+            if uploaded_csv is not None:
+                import pandas as pd
+                import re as _re
 
-                # Auto-suggest table name from filename
-                raw_name = Path(uploaded_file.name).stem
-                default_name = _re.sub(r'[^a-z0-9_]', '_', raw_name.lower()).strip('_')
-                default_name = _re.sub(r'_+', '_', default_name)  # collapse multi-underscores
+                try:
+                    df_preview = pd.read_csv(uploaded_csv)
+                    uploaded_csv.seek(0)
 
-                table_name = st.text_input(
-                    "Table name",
-                    value=default_name,
-                    help="This will be the SQL table name. Use lowercase with underscores.",
-                    key="csv_table_name",
-                )
+                    raw_name = Path(uploaded_csv.name).stem
+                    default_name = _re.sub(r'[^a-z0-9_]', '_', raw_name.lower()).strip('_')
+                    default_name = _re.sub(r'_+', '_', default_name)
 
-                # Preview
-                st.markdown(f"**Preview** — {len(df_preview):,} rows × {len(df_preview.columns)} cols")
-                st.dataframe(df_preview.head(10), use_container_width=True, height=200)
+                    table_name = st.text_input(
+                        "Table name",
+                        value=default_name,
+                        help="SQL table name. Use lowercase with underscores.",
+                        key="csv_table_name",
+                    )
 
-                # Column types
-                with st.expander("📋 Detected Columns"):
-                    col_info = pd.DataFrame({
-                        "Column": df_preview.columns,
-                        "Type": [str(dt) for dt in df_preview.dtypes],
-                        "Non-Null": [f"{df_preview[c].notna().sum()}/{len(df_preview)}" for c in df_preview.columns],
-                        "Sample": [str(df_preview[c].dropna().iloc[0])[:40] if df_preview[c].notna().any() else "—" for c in df_preview.columns],
-                    })
-                    st.dataframe(col_info, use_container_width=True, hide_index=True)
+                    st.markdown(f"**Preview** — {len(df_preview):,} rows × {len(df_preview.columns)} cols")
+                    st.dataframe(df_preview.head(10), use_container_width=True, height=200)
 
-                # Validate table name
-                valid_name = bool(_re.match(r'^[a-z][a-z0-9_]*$', table_name)) and len(table_name) >= 2
-                if not valid_name:
-                    st.warning("⚠️ Table name must start with a letter, use only `a-z`, `0-9`, `_`, and be ≥ 2 chars.")
+                    with st.expander("📋 Detected Columns"):
+                        col_info = pd.DataFrame({
+                            "Column": df_preview.columns,
+                            "Type": [str(dt) for dt in df_preview.dtypes],
+                            "Non-Null": [f"{df_preview[c].notna().sum()}/{len(df_preview)}" for c in df_preview.columns],
+                            "Sample": [str(df_preview[c].dropna().iloc[0])[:40] if df_preview[c].notna().any() else "—" for c in df_preview.columns],
+                        })
+                        st.dataframe(col_info, use_container_width=True, hide_index=True)
 
-                # Load button
+                    valid_name = bool(_re.match(r'^[a-z][a-z0-9_]*$', table_name)) and len(table_name) >= 2
+                    if not valid_name:
+                        st.warning("⚠️ Table name must start with a letter, use only `a-z`, `0-9`, `_`, and be ≥ 2 chars.")
+
+                    if st.button(
+                        f"📥 Load into database as `{table_name}`",
+                        use_container_width=True,
+                        disabled=not valid_name,
+                        type="primary",
+                    ):
+                        with st.spinner(f"Loading {len(df_preview):,} rows into `{table_name}`..."):
+                            try:
+                                temp_path = Path("data") / f"_upload_{table_name}.csv"
+                                temp_path.parent.mkdir(parents=True, exist_ok=True)
+                                df_preview.to_csv(temp_path, index=False)
+
+                                from utils.db_loader import load_custom_csv_to_sqlite
+                                col_types = load_custom_csv_to_sqlite(
+                                    csv_path=str(temp_path),
+                                    table_name=table_name,
+                                    db_path="data/database.db",
+                                )
+                                temp_path.unlink(missing_ok=True)
+
+                                st.session_state.uploaded_tables.append({
+                                    "name": table_name,
+                                    "rows": len(df_preview),
+                                    "cols": len(df_preview.columns),
+                                    "columns": list(df_preview.columns),
+                                })
+
+                                if st.session_state.agent:
+                                    st.session_state.agent._sql_tool = None
+
+                                st.success(
+                                    f"✅ Loaded **{len(df_preview):,} rows** into "
+                                    f"table `{table_name}` ({len(col_types)} columns).\n\n"
+                                    f"Try asking: *\"Show me the first 5 rows from {table_name}\"*"
+                                )
+                                st.balloons()
+                                time.sleep(1.5)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Failed to load CSV: {e}")
+
+                except Exception as e:
+                    st.error(f"❌ Could not read CSV: {e}")
+
+        # ---- PDF Upload ----
+        else:
+            uploaded_pdfs = st.file_uploader(
+                "Drop PDF documents for RAG Q&A",
+                type=["pdf"],
+                accept_multiple_files=True,
+                help="PDFs will be chunked and indexed. You can then ask questions about their content.",
+                key="pdf_uploader",
+            )
+
+            if uploaded_pdfs:
+                st.markdown(f"**{len(uploaded_pdfs)} file(s) selected**")
+                for f in uploaded_pdfs:
+                    st.caption(f"📄 {f.name} ({f.size / 1024:.1f} KB)")
+
                 if st.button(
-                    f"📥 Load into database as `{table_name}`",
+                    f"📥 Ingest {len(uploaded_pdfs)} PDF(s) into knowledge base",
                     use_container_width=True,
-                    disabled=not valid_name,
                     type="primary",
                 ):
-                    with st.spinner(f"Loading {len(df_preview):,} rows into `{table_name}`..."):
+                    with st.spinner("📄 Parsing and embedding documents..."):
                         try:
-                            # Save temp CSV
-                            temp_path = Path("data") / f"_upload_{table_name}.csv"
-                            temp_path.parent.mkdir(parents=True, exist_ok=True)
-                            df_preview.to_csv(temp_path, index=False)
+                            from utils.doc_loader import DocumentLoader
 
-                            # Ingest into SQLite
-                            from utils.db_loader import load_custom_csv_to_sqlite
-                            col_types = load_custom_csv_to_sqlite(
-                                csv_path=str(temp_path),
-                                table_name=table_name,
-                                db_path="data/database.db",
+                            docs_dir = Path("data/docs")
+                            docs_dir.mkdir(parents=True, exist_ok=True)
+
+                            loader = DocumentLoader(
+                                persist_dir="vectorstore",
+                                verbose=False,
                             )
 
-                            # Clean up temp file
-                            temp_path.unlink(missing_ok=True)
+                            total_chunks = 0
+                            for pdf_file in uploaded_pdfs:
+                                save_path = docs_dir / pdf_file.name
+                                save_path.write_bytes(pdf_file.read())
 
-                            # Track uploaded tables
-                            if "uploaded_tables" not in st.session_state:
-                                st.session_state.uploaded_tables = []
-                            st.session_state.uploaded_tables.append({
-                                "name": table_name,
-                                "rows": len(df_preview),
-                                "cols": len(df_preview.columns),
-                                "columns": list(df_preview.columns),
-                            })
+                                n_chunks = loader.load_pdf(str(save_path))
+                                total_chunks += n_chunks
 
-                            # Force agent to reinitialize SQL tool so it picks up new tables
+                                st.session_state.uploaded_pdfs.append({
+                                    "name": pdf_file.name,
+                                    "size_kb": round(pdf_file.size / 1024, 1),
+                                    "chunks": n_chunks,
+                                })
+
+                            # Force agent to reinitialize RAG tool
                             if st.session_state.agent:
-                                st.session_state.agent._sql_tool = None
+                                st.session_state.agent._rag_tool = None
 
                             st.success(
-                                f"✅ Loaded **{len(df_preview):,} rows** into "
-                                f"table `{table_name}` ({len(col_types)} columns).\n\n"
-                                f"Try asking: *\"Show me the first 5 rows from {table_name}\"*"
+                                f"✅ Indexed **{total_chunks} chunks** from "
+                                f"{len(uploaded_pdfs)} PDF(s).\n\n"
+                                f"Try asking: *\"What does {uploaded_pdfs[0].name} say about ...?\"*"
                             )
                             st.balloons()
                             time.sleep(1.5)
                             st.rerun()
 
                         except Exception as e:
-                            st.error(f"❌ Failed to load CSV: {e}")
+                            st.error(f"❌ Failed to process PDFs: {e}")
 
-            except Exception as e:
-                st.error(f"❌ Could not read CSV file: {e}")
-
-        # Show uploaded tables
-        if st.session_state.get("uploaded_tables"):
+        # Show uploaded assets
+        if st.session_state.uploaded_tables:
             st.markdown("**📊 Your Tables:**")
             for tbl in st.session_state.uploaded_tables:
                 st.markdown(
                     f"- `{tbl['name']}` — {tbl['rows']:,} rows, {tbl['cols']} cols"
                 )
+        if st.session_state.uploaded_pdfs:
+            st.markdown("**📄 Your Documents:**")
+            for doc in st.session_state.uploaded_pdfs:
+                st.markdown(
+                    f"- {doc['name']} — {doc['chunks']} chunks"
+                )
 
         st.divider()
 
-        # Export PDF
+        # --- Export Section ---
         st.markdown("### 📥 Export")
-        if st.button("📄 Export Chat as PDF", use_container_width=True):
-            from agent.extras import ReportExporter
-            exporter = ReportExporter()
-            output = exporter.export(
-                st.session_state.messages,
-                filename="data/analysis_report.pdf",
-            )
-            if output:
-                with open(output, "rb") as f:
-                    st.download_button(
-                        "⬇️ Download PDF",
-                        data=f.read(),
-                        file_name="analysis_report.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
-            else:
-                st.warning("PDF export requires fpdf2")
+
+        export_col1, export_col2 = st.columns(2)
+
+        with export_col1:
+            # PDF Report Export
+            if st.button("📄 PDF Report", use_container_width=True):
+                from agent.extras import ReportExporter
+                exporter = ReportExporter()
+                output = exporter.export(
+                    st.session_state.messages,
+                    filename="data/analysis_report.pdf",
+                )
+                if output:
+                    with open(output, "rb") as f:
+                        st.download_button(
+                            "⬇️ Download PDF",
+                            data=f.read(),
+                            file_name="analysis_report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
+                else:
+                    st.warning("PDF export requires fpdf2")
+
+        with export_col2:
+            # CSV Data Export
+            if st.button("📊 CSV Data", use_container_width=True):
+                st.session_state.show_csv_export = True
+
+        # CSV export panel
+        if st.session_state.get("show_csv_export"):
+            _render_csv_export_panel()
 
         st.divider()
 
@@ -549,6 +703,9 @@ def render_sidebar():
             st.session_state.total_queries = 0
             st.session_state.total_charts = 0
             st.session_state.uploaded_tables = []
+            st.session_state.uploaded_pdfs = []
+            st.session_state.last_dataframes = []
+            st.session_state.pop("show_csv_export", None)
             if st.session_state.agent:
                 st.session_state.agent.clear_memory()
             st.rerun()
@@ -711,6 +868,46 @@ def process_query(query: str):
                                 data=sql_result.get("data", []),
                             )
                             st.markdown(insights)
+
+                # --- CSV download for query results ---
+                result_dfs = result.get("dataframes", [])
+                sql_data = sql_result.get("data", []) if sql_result else []
+                sql_cols = sql_result.get("columns", []) if sql_result else []
+
+                if result_dfs or (sql_data and sql_cols):
+                    import pandas as pd
+                    with st.expander("📥 Export Result as CSV"):
+                        if result_dfs:
+                            for i, df in enumerate(result_dfs):
+                                if hasattr(df, 'to_csv'):
+                                    label = f"DataFrame {i + 1}" if len(result_dfs) > 1 else "Query Result"
+                                    st.markdown(f"**{label}** — {len(df):,} rows × {len(df.columns)} cols")
+                                    st.dataframe(df.head(20), use_container_width=True, height=150)
+                                    st.download_button(
+                                        f"⬇️ Download {label} as CSV",
+                                        data=df.to_csv(index=False),
+                                        file_name=f"result_{i + 1}.csv",
+                                        mime="text/csv",
+                                        key=f"dl_df_{st.session_state.total_queries}_{i}",
+                                        use_container_width=True,
+                                    )
+                        elif sql_data and sql_cols:
+                            df_sql = pd.DataFrame(sql_data, columns=sql_cols)
+                            st.markdown(f"**SQL Result** — {len(df_sql):,} rows × {len(df_sql.columns)} cols")
+                            st.dataframe(df_sql.head(20), use_container_width=True, height=150)
+                            st.download_button(
+                                "⬇️ Download SQL Result as CSV",
+                                data=df_sql.to_csv(index=False),
+                                file_name="sql_result.csv",
+                                mime="text/csv",
+                                key=f"dl_sql_{st.session_state.total_queries}",
+                                use_container_width=True,
+                            )
+
+                    # Save for sidebar export
+                    st.session_state.last_dataframes = result_dfs if result_dfs else (
+                        [pd.DataFrame(sql_data, columns=sql_cols)] if sql_data and sql_cols else []
+                    )
 
                 # Execution time
                 exec_time = result.get("execution_time", 0)
